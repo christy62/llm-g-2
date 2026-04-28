@@ -16,7 +16,7 @@ from transformers import (
 )
 import gen_event as gevt
 
-# ── Config ─────────────────────────────────────────────────────────────────
+#  Config 
 
 HF_REPO    = "christyelsa/llm-g4"
 HF_SPLIT   = "train"
@@ -58,7 +58,7 @@ PITCH_RANGE = 50.0
 MAX_INPUT_LEN  = 512
 MAX_TARGET_LEN = 64
 
-# ── Physics penalty controls ────────────────────────────────────────────────
+# ── Physics penalty controls 
 # Phase 1 (steps 0 → CE_ONLY_STEPS): pure cross-entropy, no physics penalty
 # Phase 2 (steps > CE_ONLY_STEPS): physics penalty kicks in gently
 CE_ONLY_STEPS  = 3000       # no physics until CE loss is healthy (~0.4)
@@ -66,7 +66,7 @@ PHYSICS_WEIGHT = 0.3        # kept small — never overwhelm CE loss
 GENERATE_EVERY = 20         # only run generate() every N steps for speed
 HIT_TOL_EVAL   = 0.5        # tight tolerance used in callback logging
 
-# ── Helpers ────────────────────────────────────────────────────────────────
+# ── Helpers
 
 def _fmt(v: float, scale: float) -> str:
     """Normalise v by scale and hard-clip to [-1, 1]."""
@@ -118,7 +118,7 @@ def compute_helix_features(pts: list) -> list:
         tokens.append(_fmt(arc_cum[i] / arc_tot, 1.0))
     return tokens
 
-# ── Dataset merging ────────────────────────────────────────────────────────
+# ── Dataset merging
 
 def merge_axes(raw_dataset) -> Dataset:
     groups = defaultdict(dict)
@@ -145,7 +145,7 @@ def merge_axes(raw_dataset) -> Dataset:
         merged["target"].append(key + ")")
     return Dataset.from_dict(merged)
 
-# ── Feature normalisation ──────────────────────────────────────────────────
+# ── Feature normalisation 
 
 def normalise_input(raw_str: str) -> str:
     try:
@@ -176,7 +176,7 @@ def normalise_target(raw_str: str) -> str:
                 lambda m: "mom=" + replace_list(m, MOM_RANGE), s)
     return s
 
-# ── Metric helpers ─────────────────────────────────────────────────────────
+# ── Metric helpers 
 
 def get_similarity(tgt_array, pred_array, tol=HIT_TOL_EVAL):
     """Fraction of TARGET hits that have a PRED hit within tol."""
@@ -246,7 +246,7 @@ def hits_from_physical(physical_str: str):
         hits += gevt.eval_gen_event(base + f", axis='{axis}')")
     return [hits[j:j+3] for j in range(0, len(hits), 3)]
 
-# ── Sanity check ───────────────────────────────────────────────────────────
+# ── Sanity check 
 
 print("Checking gen_event import …")
 try:
@@ -258,8 +258,7 @@ except Exception as e:
     print(f"  ERROR: {e}")
     raise SystemExit(1)
 
-# ── Load & merge dataset ───────────────────────────────────────────────────
-
+# ── Load & merge dataset 
 print(f"\nLoading dataset from {HF_REPO}/{HF_SPLIT} …")
 raw    = load_dataset(HF_REPO, split=HF_SPLIT)
 print(f"  Raw rows   : {len(raw):,}")
@@ -271,14 +270,14 @@ print(f"  Merged events: {len(merged):,}")
 raw_inputs  = [merged[i]["input"]  for i in range(len(merged))]
 raw_targets = [merged[i]["target"] for i in range(len(merged))]
 
-# ── Tokeniser & model ──────────────────────────────────────────────────────
+# ── Tokeniser & model 
 
 print(f"\nLoading tokeniser and model ({MODEL_NAME}) …")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model     = T5ForConditionalGeneration.from_pretrained(MODEL_NAME).to(DEVICE)
 print(f"  Device: {DEVICE}  |  Vocab size: {len(tokenizer)}")
 
-# ── Tokenisation ───────────────────────────────────────────────────────────
+# ── Tokenisation 
 
 def tokenize(examples):
     inputs  = [normalise_input(t)  for t in examples["input"]]
@@ -293,7 +292,7 @@ print("Tokenising …")
 tok_train     = merged.map(tokenize, batched=True, remove_columns=["input", "target"])
 data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model, padding=True)
 
-# ── Physics-aware trainer ──────────────────────────────────────────────────
+# ── Physics-aware trainer
 
 class PhysicsTrainer(Seq2SeqTrainer):
     """
@@ -309,102 +308,9 @@ class PhysicsTrainer(Seq2SeqTrainer):
         super().__init__(*args, **kwargs)
         self._phys_step = 0
 
-    def compute_loss(self, model, inputs, num_items_in_batch=0, return_outputs=False):
-        # ── cross-entropy loss (always computed) ──────────────────────────
-        outputs = model(
-            input_ids      = inputs.get("input_ids"),
-            attention_mask = inputs.get("attention_mask"),
-            labels         = inputs.get("labels"),
-        )
-        loss = outputs.loss
-        self._phys_step += 1
-        step = self.state.global_step
+    
 
-        # ── Phase 1: pure CE — let model relearn the scale first ──────────
-        if step < CE_ONLY_STEPS:
-            if self._phys_step % 200 == 0:
-                print(f"  [Phase 1 | step {step}] CE={loss.item():.4f}  "
-                      f"(physics disabled until step {CE_ONLY_STEPS})")
-            return (loss, outputs) if return_outputs else loss
-
-        # ── Phase 2: add physics penalty every GENERATE_EVERY steps ───────
-        if self._phys_step % GENERATE_EVERY != 0:
-            return (loss, outputs) if return_outputs else loss
-
-        # dynamic tolerance: wide early, tight later
-        if step < CE_ONLY_STEPS + 2000:
-            tol = 10.0
-        elif step < CE_ONLY_STEPS + 4000:
-            tol = 5.0
-        elif step < CE_ONLY_STEPS + 6000:
-            tol = 2.0
-        else:
-            tol = 0.5
-
-        # ── generate predictions ───────────────────────────────────────────
-        with torch.no_grad():
-            generated = model.generate(
-                inputs         = inputs["input_ids"],
-                attention_mask = inputs["attention_mask"],
-                max_length     = MAX_TARGET_LEN,
-            )
-
-        label_ids    = inputs["labels"].tolist()
-        target_texts = self.processing_class.batch_decode(
-            [[t for t in row if t != -100] for row in label_ids],
-            skip_special_tokens=True,
-        )
-
-        similarity     = 0.0
-        dsimilarity    = 0.0
-        format_penalty = 0.0
-        n              = len(generated)
-
-        for tgt_norm, pred_ids in zip(target_texts, generated):
-            pred_norm     = self.processing_class.decode(pred_ids, skip_special_tokens=True)
-            pred_physical = denorm_target(pred_norm)
-            tgt_physical  = denorm_target(tgt_norm)
-
-            if not gevt.is_valid_gen_event(pred_physical):
-                format_penalty += 1.0    # soft penalty — syntax mostly learned already
-                dsimilarity    += 1.0
-                continue
-
-            try:
-                tgt_array  = hits_from_physical(tgt_physical)
-                pred_array = hits_from_physical(pred_physical)
-                similarity  += get_similarity(tgt_array,  pred_array, tol=tol)
-                dsimilarity += get_dsimilarity(tgt_array, pred_array, tol=tol)
-            except Exception as e:
-                dsimilarity += 1.0
-
-        similarity     /= n
-        dsimilarity    /= n
-        format_penalty /= n
-
-        physics_penalty = (
-            PHYSICS_WEIGHT * (1.0 - similarity) +
-            PHYSICS_WEIGHT * dsimilarity +
-            format_penalty
-        )
-
-        # CRITICAL: cap so physics never exceeds CE loss
-        physics_penalty = torch.tensor(
-            min(physics_penalty, loss.item()),
-            dtype=loss.dtype, device=loss.device
-        )
-
-        total_loss = loss + physics_penalty
-
-        if self._phys_step % 200 == 0:
-            print(f"\n  [Phase 2 | step {step}] CE={loss.item():.4f}  "
-                  f"S={similarity:.3f}  D={dsimilarity:.3f}  "
-                  f"tol={tol}  phys={physics_penalty.item():.4f}  "
-                  f"total={total_loss.item():.4f}")
-
-        return (total_loss, outputs) if return_outputs else total_loss
-
-# ── Metrics callback ───────────────────────────────────────────────────────
+# ── Metrics callback 
 
 class MetricsLoggerCallback(TrainerCallback):
     def __init__(self, tokenizer, train_dataset, raw_inputs, raw_targets,
@@ -524,39 +430,9 @@ class MetricsLoggerCallback(TrainerCallback):
         print('='*60)
         model.train()
 
-    def plot(self, save_path=None):
-        if not self.s_all:
-            print("No metrics logged yet.")
-            return
+    
 
-        fig, axes = plt.subplots(2, 2, figsize=(10, 8))
-        COLOR = "#e74c3c"
-
-        def _hist(ax, data, xlabel, title):
-            if not data:
-                ax.set_title(title + " (no data)")
-                return
-            ax.hist(data, bins=20, color=COLOR)
-            ax.set_yscale("log")
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel("Counts")
-            ax.set_title(title)
-            ax.grid(True, linestyle="--", linewidth=0.4, alpha=0.5)
-
-        _hist(axes[0, 0], self.c_all,      "Compression (%)", "Expected compression ratio")
-        _hist(axes[0, 1], self.c_pred_all, "Compression (%)", "Predicted compression ratio")
-        _hist(axes[1, 0], self.s_all,      "Similarity",      "Similarity (higher=better)")
-        _hist(axes[1, 1], self.d_all,      "Dissimilarity",   "Dissimilarity (lower=better)")
-
-        plt.suptitle("Distribution of metrics", fontsize=12)
-        plt.tight_layout()
-        if save_path:
-            plt.savefig(save_path, dpi=150)
-            print(f"  Saved → {save_path}")
-        plt.show()
-        plt.close()   # prevent memory buildup over many calls
-
-# ── Training arguments ─────────────────────────────────────────────────────
+#  Training arguments 
 
 training_args = Seq2SeqTrainingArguments(
     output_dir                  = OUTPUT_DIR,
@@ -580,7 +456,7 @@ training_args = Seq2SeqTrainingArguments(
     report_to                   = "none",
 )
 
-# ── Callback & trainer ─────────────────────────────────────────────────────
+#  Callback & trainer
 
 metrics_cb = MetricsLoggerCallback(
     tokenizer     = tokenizer,
@@ -606,7 +482,7 @@ trainer.create_optimizer_and_scheduler(num_training_steps=training_args.max_step
 for param_group in trainer.optimizer.param_groups:
     param_group["lr"] = LR
 
-# ── Train ──────────────────────────────────────────────────────────────────
+#  Train 
 
 print("\nStarting training …")
 print(f"  Phase 1: CE only  (steps 0 → {CE_ONLY_STEPS})")
