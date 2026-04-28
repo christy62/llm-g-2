@@ -11,6 +11,7 @@ In this Master's project, I explore an alternative approach by framing particle 
 - `fine_tune_llm.py` - Training script for the LLM model  
 - `generate_decay_details.py` - Generates the decay momentum and the decay vertex of the particle
 - `generate_hits.py` - Generates the hits after the physics processes
+- `IMG` - This folder contains plots of few particle tracks
 
   These are the preliminary scripts used for data generation and model training.
   The inference code for this work is available on my [Colab Notebook](https://colab.research.google.com/drive/1c7w0GiQqgrdfyeTrrUDGuDNNodo4qTLU?usp=sharing).
