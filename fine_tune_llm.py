@@ -51,69 +51,15 @@ NUM_EPOCHS = 500
 LR         = 5e-5      
 COORD_RANGE = 333.564
 MOM_RANGE   = 300.0
-DELTA_RANGE = 50.0
-CURV_RANGE  = 0.05
-PITCH_RANGE = 50.0
 
 MAX_INPUT_LEN  = 512
 MAX_TARGET_LEN = 64
-
-# ── Physics penalty controls 
-CE_ONLY_STEPS  = 3000       # no physics until CE loss is healthy (~0.4)
-PHYSICS_WEIGHT = 0.3        # kept small — never overwhelm CE loss
 GENERATE_EVERY = 20         # only run generate() every N steps for speed
 
 # ── Helpers
 
-def _fmt(v: float, scale: float) -> str:
-    """Normalise v by scale and hard-clip to [-1, 1]."""
-    v = round(v, 1)
-    x = max(-1.0, min(1.0, v / scale))   # hard clip — prevents >1 outputs
-    return f"{x:+.4f}"
-
-def compute_kappa(p0, p1, p2) -> float:
-    area  = 0.5 * ((p1[0]-p0[0])*(p2[1]-p0[1])
-                  -(p2[0]-p0[0])*(p1[1]-p0[1]))
-    d01   = np.linalg.norm(p1 - p0)
-    d12   = np.linalg.norm(p2 - p1)
-    d20   = np.linalg.norm(p0 - p2)
-    denom = d01 * d12 * d20
-    return float(2.0 * area / denom) if denom > 1e-9 else 0.0
-
-def compute_helix_features(pts: list) -> list:
-    n   = len(pts)
-    arr = np.array(pts, dtype=np.float64)
-    tokens = []
-    dxy     = np.linalg.norm(np.diff(arr[:, :2], axis=0), axis=1)
-    arc_cum = np.concatenate([[0.0], np.cumsum(dxy)])
-    arc_tot = arc_cum[-1] if arc_cum[-1] > 0 else 1.0
-    tokens.append(_fmt(arc_tot, COORD_RANGE))
-    for i in range(n):
-        tokens += [_fmt(arr[i,0], COORD_RANGE),
-                   _fmt(arr[i,1], COORD_RANGE),
-                   _fmt(arr[i,2], COORD_RANGE)]
-        if i < n - 1:
-            dx, dy, dz = arr[i+1] - arr[i]
-        else:
-            dx, dy, dz = arr[i] - arr[i-1]
-        dr = math.hypot(dx, dy)
-        tokens += [_fmt(dx, DELTA_RANGE), _fmt(dy, DELTA_RANGE),
-                   _fmt(dz, DELTA_RANGE), _fmt(dr, DELTA_RANGE)]
-        if n >= 3:
-            if i == 0:
-                kappa = compute_kappa(arr[0,:2], arr[1,:2], arr[2,:2])
-            elif i == n - 1:
-                kappa = compute_kappa(arr[-3,:2], arr[-2,:2], arr[-1,:2])
-            else:
-                kappa = compute_kappa(arr[i-1,:2], arr[i,:2], arr[i+1,:2])
-        else:
-            kappa = 0.0
-        tokens.append(_fmt(kappa, CURV_RANGE))
-        dphi  = dr * abs(kappa)
-        pitch = float(dz / dphi) if dphi > 1e-9 else 0.0
-        tokens.append(_fmt(pitch, PITCH_RANGE))
-        tokens.append(_fmt(arc_cum[i] / arc_tot, 1.0))
-    return tokens
+def compute_helix_features(pts):
+    raise NotImplementedError("Feature extraction omitted")
 
 # ── Dataset merging
 
@@ -144,6 +90,9 @@ def merge_axes(raw_dataset) -> Dataset:
 
 # ── Feature normalisation 
 
+def _fmt(v, scale):
+    raise NotImplementedError
+    
 def normalise_input(raw_str: str) -> str:
     try:
         vals = ast.literal_eval(raw_str)
@@ -175,11 +124,7 @@ def normalise_target(raw_str: str) -> str:
 
 # ── Metric helpers 
 def denorm_target(pred_str: str) -> str:
-    """
-    Undo _fmt() normalisation back to physical units.
-    Also clamps model output to [-1, 1] before rescaling to prevent
-    out-of-detector coordinates that make gen_event return 0 hits.
-    """
+  
     def rescale(m, scale):
         vals = safe_parse_list(m.group(1))
         if not vals:
