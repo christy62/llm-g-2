@@ -55,12 +55,12 @@ MAX_INPUT_LEN  = 512
 MAX_TARGET_LEN = 64
 GENERATE_EVERY = 20         # only run generate() every N steps for speed
 
-# ── Helpers
+# Helpers
 
 def compute_helix_features(pts):
     raise NotImplementedError("Feature extraction omitted")
 
-# ── Dataset merging
+# Dataset merging
 
 def merge_axes(raw_dataset) -> Dataset:
     groups = defaultdict(dict)
@@ -87,7 +87,7 @@ def merge_axes(raw_dataset) -> Dataset:
         merged["target"].append(key + ")")
     return Dataset.from_dict(merged)
 
-# ── Feature normalisation 
+# Feature normalisation 
 
 def _fmt(v, scale):
     raise NotImplementedError
@@ -121,7 +121,7 @@ def normalise_target(raw_str: str) -> str:
                 lambda m: "mom=" + replace_list(m, MOM_RANGE), s)
     return s
 
-# ── Metric helpers 
+# Metric helpers 
 def denorm_target(pred_str: str) -> str:
   
     def rescale(m, scale):
@@ -150,7 +150,7 @@ def hits_from_physical(physical_str: str):
         hits += gevt.eval_gen_event(base + f", axis='{axis}')")
     return [hits[j:j+3] for j in range(0, len(hits), 3)]
 
-# ── Sanity check 
+# Sanity check 
 
 print("Checking gen_event import …")
 try:
@@ -162,7 +162,7 @@ except Exception as e:
     print(f"  ERROR: {e}")
     raise SystemExit(1)
 
-# ── Load & merge dataset 
+# Load & merge dataset 
 print(f"\nLoading dataset from {HF_REPO}/{HF_SPLIT} …")
 raw    = load_dataset(HF_REPO, split=HF_SPLIT)
 print(f"  Raw rows   : {len(raw):,}")
@@ -174,14 +174,14 @@ print(f"  Merged events: {len(merged):,}")
 raw_inputs  = [merged[i]["input"]  for i in range(len(merged))]
 raw_targets = [merged[i]["target"] for i in range(len(merged))]
 
-# ── Tokeniser & model 
+# Tokeniser & model 
 
 print(f"\nLoading tokeniser and model ({MODEL_NAME}) …")
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model     = T5ForConditionalGeneration.from_pretrained(MODEL_NAME).to(DEVICE)
 print(f"  Device: {DEVICE}  |  Vocab size: {len(tokenizer)}")
 
-# ── Tokenisation 
+# Tokenisation 
 
 def tokenize(examples):
     inputs  = [normalise_input(t)  for t in examples["input"]]
@@ -196,17 +196,27 @@ print("Tokenising …")
 tok_train     = merged.map(tokenize, batched=True, remove_columns=["input", "target"])
 data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model, padding=True)
 
-# ── Physics-aware trainer
+# Physics-aware trainer
 
 class PhysicsTrainer(Seq2SeqTrainer):
-   
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._phys_step = 0
 
-    
+    def compute_loss(self, model, inputs, return_outputs=False):
+        """
+        Custom loss combining cross-entropy with physics-based constraints.
+        (Implementation intentionally abstracted)
+        """
+        loss, outputs = self._compute_custom_loss(model, inputs)
 
-# ── Metrics callback 
+        return (loss, outputs) if return_outputs else loss
+
+    def _compute_custom_loss(self, model, inputs):
+        raise NotImplementedError("Custom loss implementation omitted")
+    
+# Metrics callback 
 
 class MetricsLoggerCallback(TrainerCallback):
     def __init__(self, tokenizer, train_dataset, raw_inputs, raw_targets,
