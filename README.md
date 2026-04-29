@@ -47,7 +47,7 @@ In this Master's project, I explored an alternative approach by framing particle
   </tr>
 </table>
 
-The initial results are interesting, but the momentum resolution has to be improved. As you can see, the predicted hits exactly overlap with the true hits fpr the fully mathced tracks. For the partially matched matched tracks, the overlap can be improved by increasing the momentum resolution.
+The initial results are interesting, but the momentum resolution has to be improved. As you can see, the predicted hits exactly overlap with the true hits for the fully matched tracks. For the partially matched matched tracks, the overlap can be improved by increasing the momentum resolution.
 
 
 
