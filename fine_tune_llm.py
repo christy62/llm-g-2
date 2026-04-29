@@ -14,7 +14,6 @@ from transformers import (
     TrainerState,
     TrainerControl,
 )
-import gen_event as gevt
 
 #  Config 
 
