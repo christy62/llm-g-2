@@ -59,12 +59,9 @@ MAX_INPUT_LEN  = 512
 MAX_TARGET_LEN = 64
 
 # ── Physics penalty controls 
-# Phase 1 (steps 0 → CE_ONLY_STEPS): pure cross-entropy, no physics penalty
-# Phase 2 (steps > CE_ONLY_STEPS): physics penalty kicks in gently
 CE_ONLY_STEPS  = 3000       # no physics until CE loss is healthy (~0.4)
 PHYSICS_WEIGHT = 0.3        # kept small — never overwhelm CE loss
 GENERATE_EVERY = 20         # only run generate() every N steps for speed
-HIT_TOL_EVAL   = 0.5        # tight tolerance used in callback logging
 
 # ── Helpers
 
@@ -177,33 +174,6 @@ def normalise_target(raw_str: str) -> str:
     return s
 
 # ── Metric helpers 
-
-def get_similarity(tgt_array, pred_array, tol=HIT_TOL_EVAL):
-    """Fraction of TARGET hits that have a PRED hit within tol."""
-    if len(tgt_array) == 0 or len(pred_array) == 0:
-        return 0.0
-    tgt_arr  = np.array(tgt_array,  dtype=float)
-    pred_arr = np.array(pred_array, dtype=float)
-    matches = sum(
-        1 for hit in tgt_arr
-        if np.linalg.norm(pred_arr - hit, axis=1).min() <= tol
-    )
-    return matches / len(tgt_arr)
-
-def get_dsimilarity(tgt_array, pred_array, tol=HIT_TOL_EVAL):
-    """Fraction of PRED hits that have NO target hit within tol (spurious)."""
-    if len(pred_array) == 0:
-        return 1.0
-    if len(tgt_array) == 0:
-        return 1.0
-    tgt_arr  = np.array(tgt_array,  dtype=float)
-    pred_arr = np.array(pred_array, dtype=float)
-    spurious = sum(
-        1 for hit in pred_arr
-        if np.linalg.norm(tgt_arr - hit, axis=1).min() > tol
-    )
-    return spurious / len(pred_arr)
-
 def denorm_target(pred_str: str) -> str:
     """
     Undo _fmt() normalisation back to physical units.
@@ -227,16 +197,6 @@ def denorm_target(pred_str: str) -> str:
     else:
         s = re.sub(r"axis='[xyz]'", "axis='x'", s)
     return s
-
-def compression_ratio(raw_input_str: str) -> float:
-    try:
-        vals = ast.literal_eval(raw_input_str)
-        L_i  = len(vals) // 3
-        if L_i == 0:
-            return float('nan')
-        return (L_i - 6) / L_i * 100.0
-    except Exception:
-        return float('nan')
 
 def hits_from_physical(physical_str: str):
     """Run gen_event for all 3 axes and return list of [x,y,z] triplets."""
@@ -295,15 +255,7 @@ data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=model, padding
 # ── Physics-aware trainer
 
 class PhysicsTrainer(Seq2SeqTrainer):
-    """
-    Phase 1 (step < CE_ONLY_STEPS): pure cross-entropy only.
-        → model re-learns correct scale mapping first
-    Phase 2 (step >= CE_ONLY_STEPS): adds physics penalty every GENERATE_EVERY steps.
-        → gently guides predictions toward physically correct hit positions
-
-    total_loss = CE + PHYSICS_WEIGHT*(1-S) + PHYSICS_WEIGHT*D
-    Physics penalty is capped at CE loss so it never dominates.
-    """
+   
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._phys_step = 0
@@ -430,8 +382,6 @@ class MetricsLoggerCallback(TrainerCallback):
         print('='*60)
         model.train()
 
-    
-
 #  Training arguments 
 
 training_args = Seq2SeqTrainingArguments(
@@ -477,7 +427,7 @@ trainer = PhysicsTrainer(
     callbacks        = [metrics_cb],
 )
 
-# set LR explicitly (overrides any checkpoint-loaded optimizer state)
+# set LR explicitly 
 trainer.create_optimizer_and_scheduler(num_training_steps=training_args.max_steps)
 for param_group in trainer.optimizer.param_groups:
     param_group["lr"] = LR
@@ -501,5 +451,3 @@ else:
 model.save_pretrained(SAVE_DIR)
 tokenizer.save_pretrained(SAVE_DIR)
 print(f"\nModel saved → {SAVE_DIR}")
-
-metrics_cb.plot(save_path=os.path.join(SAVE_DIR, "eval_final.png"))
